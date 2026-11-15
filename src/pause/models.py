@@ -72,6 +72,7 @@ class StoreReport:
     shipping_note: str | None = None    # e.g. "0-5 days"
     shipping_days_max: int | None = None
     poor_sentiment: dict[str, int] = field(default_factory=dict)  # topic -> % poor
+    mentions: dict[str, int] = field(default_factory=dict)        # topic -> how many reviews mention it
     other_ratings: dict[str, str] = field(default_factory=dict)   # name -> "85/100"
     scamadviser: int | None = None
     summary: str | None = None

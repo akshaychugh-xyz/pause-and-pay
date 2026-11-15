@@ -170,7 +170,8 @@ def _store_facts(store: StoreReport) -> dict:
         "google_badge": store.badge,
         "return_window_days": store.return_window_days,
         "shipping": _clean(store.shipping_note or "") or None,
-        "negative_mentions_pct_by_topic": store.poor_sentiment or None,
+        "review_topics": [{"topic": topic, "mentions": store.mentions.get(topic), "negative_pct": pct}
+                          for topic, pct in store.poor_sentiment.items()] or None,
         "third_party_scores": store.other_ratings or None,
         "domain_first_seen_by_google": _clean(store.first_indexed or "", 100) or None,
         "describes_itself_as": store.sells,
