@@ -19,8 +19,8 @@ The data comes from [SearchApi](https://www.searchapi.io/?utm_source=dev&utm_med
 You need Python 3.10+ and a SearchApi key. [Sign up here](https://www.searchapi.io/?utm_source=dev&utm_medium=ambassador&utm_campaign=akshaychugh.xyz): the free tier has 100 requests, which is about 20 full pauses.
 
 ```bash
-git clone https://github.com/akshaychugh-xyz/pay-with-a-pause
-cd pay-with-a-pause
+git clone https://github.com/akshaychugh-xyz/pause-and-pay
+cd pause-and-pay
 pip install -e .
 export SEARCHAPI_API_KEY=your_key
 ```

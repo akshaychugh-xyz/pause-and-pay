@@ -4,7 +4,7 @@ The agent can call pay() as often as it likes. Without a token from
 pause_before_pay (or from a human running `pause approve`), it is refused.
 There is deliberately no "approve" tool: approval belongs to the human.
 
-Run:  pause-mcp            (after `pip install "pay-with-a-pause[mcp]"`)
+Run:  pause-mcp            (after `pip install -e ".[mcp]"`)
 Add:  claude mcp add pause -e SEARCHAPI_API_KEY=... -- pause-mcp
 """
 
