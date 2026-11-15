@@ -21,23 +21,27 @@ from .trust import domain_age_years
 _SYMBOLS = {"USD": "$", "INR": "₹", "EUR": "€", "GBP": "£"}
 
 
-def decide(intent: PurchaseIntent, store: StoreReport, deal: DealReport | None,
-           policy: Policy, alt_stores: dict[str, StoreReport] | None = None) -> Verdict:
-    """`alt_stores` holds the store reports for cheaper sellers found by the
-    deal check (domain -> report), so an alternative is judged like the original."""
-    blocks: list[str] = []   # enough on their own to stop the purchase
-    flags: list[str] = []    # a human should look
-    good: list[str] = []     # evidence in favour
-    notes: list[str] = []    # checked, didn't change the outcome
-    symbol = _SYMBOLS.get(intent.currency, intent.currency + " ")
-    money = lambda amount: f"{symbol}{amount:,.2f}"
+def hard_stops(intent: PurchaseIntent, store: StoreReport, deal: DealReport | None,
+               policy: Policy) -> tuple[list[str], list[str], list[str]]:
+    """The floor. Returns (blocks, must_ask, waived).
 
+    These are not judgment calls, so no judge, rule-based or LLM, gets to
+    loosen them:
+      - the check itself failed            -> ask (never proceed blind)
+      - Google has no profile of the store -> ask
+      - ...and it imitates a brand, or the price is absurdly low -> block
+      - ScamAdviser score on the floor     -> block
+    `waived` holds an unknown-store warning that was set aside because the
+    buyer has used the store before.
+    """
+    blocks: list[str] = []
+    must_ask: list[str] = []
+    waived: list[str] = []
+    money = _money(intent)
     usual = deal.median_price if deal and deal.matched else None
-    below_usual = (1 - intent.price / usual) * 100 if usual else 0.0
 
-    # ---------------------------------------------------------------- trust
     if store.error:
-        flags.append(f"Could not check the store ({store.error}). Unknown is not the same as safe.")
+        must_ask.append(f"Could not check the store ({store.error}). Unknown is not the same as safe.")
     elif not store.known:
         seen = (f"domain history: {store.first_indexed}" if store.first_indexed
                 else "Google has no record of the domain either")
@@ -46,14 +50,41 @@ def decide(intent: PurchaseIntent, store: StoreReport, deal: DealReport | None,
             blocks.append(f"{unknown} It uses the brand's name, but the brand's own site "
                           f"is {store.lookalike_of}.")
         elif usual and intent.price < policy.scam_cheap_ratio * usual:
-            blocks.append(f"{unknown} And the price is {below_usual:.0f}% below the usual "
-                          f"{money(usual)}.")
+            below = (1 - intent.price / usual) * 100
+            blocks.append(f"{unknown} And the price is {below:.0f}% below the usual {money(usual)}.")
+        elif store.domain in policy.known_merchants:
+            waived.append(f"(You've bought here before.) {unknown}")
         else:
-            flags.append(unknown)
+            must_ask.append(unknown)
+    elif store.scamadviser is not None and store.scamadviser < policy.scamadviser_block_below:
+        blocks.append(f"{store.title or store.domain} has a ScamAdviser trust score of "
+                      f"{store.scamadviser}/100.")
+    return blocks, must_ask, waived
+
+
+def _money(intent: PurchaseIntent):
+    symbol = _SYMBOLS.get(intent.currency, intent.currency + " ")
+    return lambda amount: f"{symbol}{amount:,.2f}"
+
+
+def decide(intent: PurchaseIntent, store: StoreReport, deal: DealReport | None,
+           policy: Policy, alt_stores: dict[str, StoreReport] | None = None) -> Verdict:
+    """`alt_stores` holds the store reports for cheaper sellers found by the
+    deal check (domain -> report), so an alternative is judged like the original."""
+    flags: list[str] = []    # a human should look
+    good: list[str] = []     # evidence in favour
+    notes: list[str] = []    # checked, didn't change the outcome
+    money = _money(intent)
+    usual = deal.median_price if deal and deal.matched else None
+    below_usual = (1 - intent.price / usual) * 100 if usual else 0.0
+
+    # ---------------------------------------------------------------- trust
+    blocks, must_ask, waived = hard_stops(intent, store, deal, policy)
+    notes += waived
+    if store.error or not store.known:
+        pass  # nothing softer to weigh: hard_stops has already spoken
     else:
         name = store.title or store.domain
-        if store.scamadviser is not None and store.scamadviser < policy.scamadviser_block_below:
-            blocks.append(f"{name} has a ScamAdviser trust score of {store.scamadviser}/100.")
         if store.rating is None:
             age = domain_age_years(store.first_indexed)
             flags.append(f"{name} has no customer reviews on Google"
@@ -139,6 +170,7 @@ def decide(intent: PurchaseIntent, store: StoreReport, deal: DealReport | None,
                              "cheaper seller passed the checks.")
 
     # -------------------------------------------------------------- verdict
+    flags = must_ask + flags
     if blocks:
         return Verdict(BLOCK, blocks + flags, good + notes)
     if alternative:
@@ -153,17 +185,19 @@ def decide(intent: PurchaseIntent, store: StoreReport, deal: DealReport | None,
     return Verdict(PROCEED, good, notes)
 
 
-def switch_candidates(intent: PurchaseIntent, deal: DealReport, policy: Policy) -> list[Offer]:
+def switch_candidates(intent: PurchaseIntent, deal: DealReport, policy: Policy,
+                      min_saving_pct: float | None = None) -> list[Offer]:
     """Offers cheap enough to be worth switching for, and plausibly the same
-    thing. Cheapest first. The gate looks these stores up before decide() runs."""
-    needed = max(policy.min_saving_abs, intent.price * policy.min_saving_pct / 100)
+    thing. Cheapest first. The gate looks these stores up before a judge runs."""
+    pct = policy.min_saving_pct if min_saving_pct is None else min_saving_pct
+    needed = max(policy.min_saving_abs, intent.price * pct / 100)
     return [offer for offer in deal.offers
             if intent.price - offer.total_price >= needed
             and offer.domain != intent.domain
-            and _why_not_like_for_like(offer, deal, policy, intent) is None]
+            and why_not_like_for_like(offer, deal, policy, intent) is None]
 
 
-def _why_not_like_for_like(offer: Offer, deal: DealReport, policy: Policy,
+def why_not_like_for_like(offer: Offer, deal: DealReport, policy: Policy,
                            intent: PurchaseIntent) -> str | None:
     if intent.condition == "new" and offer.condition_hint:
         return f"listed as {offer.condition_hint}"
@@ -190,7 +224,7 @@ def _best_alternative(intent: PurchaseIntent, deal: DealReport, policy: Policy,
         if offer.domain == intent.domain:
             continue
         label = f"Cheaper at {offer.merchant} ({money(offer.total_price)}), but skipped"
-        why_not = _why_not_like_for_like(offer, deal, policy, intent)
+        why_not = why_not_like_for_like(offer, deal, policy, intent)
         seller = alt_stores.get(offer.domain)
         if why_not:
             skipped.append(f"{label}: {why_not}.")

@@ -9,7 +9,8 @@ dependencies = []
 
 [project.optional-dependencies]
 mcp = ["mcp>=2"]
-dev = ["pytest>=8"]
+llm = ["anthropic>=1"]
+dev = ["pytest>=8", "anthropic>=1"]
 
 [project.scripts]
 pause = "pause.cli:main"

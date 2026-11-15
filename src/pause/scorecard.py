@@ -8,6 +8,7 @@ trust it, and to re-check after changing a threshold.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from statistics import median
 
@@ -26,11 +27,14 @@ class _Offline(SearchApi):
         raise SearchApiError(f"{engine}: network unreachable (simulated)")
 
 
-def run(cases_file: Path, cache_dir: Path | None = None, out: Path | None = None) -> int:
+def run(cases_file: Path, cache_dir: Path | None = None, out: Path | None = None,
+        base_policy: Policy | None = None) -> int:
     cases = json.loads(Path(cases_file).read_text())
     rows, failures, timings = [], 0, []
+    model_calls = disagreements = 0
     for number, case in enumerate(cases, start=1):
-        policy = Policy(known_merchants=set(case.get("known_merchants", [])))
+        policy = replace(base_policy or Policy(),
+                         known_merchants=set(case.get("known_merchants", [])))
         if case.get("threshold_scale"):
             policy = policy.scaled(case["threshold_scale"])
         api = _Offline() if case.get("simulate_outage") else SearchApi(cache_dir=cache_dir)
@@ -44,6 +48,14 @@ def run(cases_file: Path, cache_dir: Path | None = None, out: Path | None = None
         if live:
             timings.append(receipt.seconds)
         why = receipt.verdict.reasons[0] if receipt.verdict.reasons else ""
+        judged = receipt.judge
+        if judged["mode"] == "llm":
+            rules_said = _LABELS[judged["rules_decision"]]
+            why += f" _(model; thresholds said: {rules_said})_"
+            disagreements += judged["rules_decision"] != got
+            model_calls += 1
+        elif judged.get("error"):
+            why += f" _(model failed: {judged['error']})_"
         rows.append((number, case["name"], _LABELS[got], "yes" if passed else f"NO (expected {_LABELS[expected]})",
                      why, len(receipt.searches), seconds))
         print(f"[{number:>2}/{len(cases)}] {'ok ' if passed else 'FAIL'} {case['name']}: {_LABELS[got]}", flush=True)
@@ -60,6 +72,9 @@ def run(cases_file: Path, cache_dir: Path | None = None, out: Path | None = None
     if timings:
         summary += (f" Pauses that searched live took {median(timings):.1f}s (median), "
                     f"{max(timings):.1f}s at worst.")
+    if model_calls:
+        summary += (f" The model judged {model_calls} of {len(rows)} cases (the rest were hard stops "
+                    f"or skipped) and disagreed with the fixed thresholds on {disagreements}.")
     print("\n" + table + "\n" + summary)
     if out:
         Path(out).write_text(table + "\n" + summary + "\n")

@@ -167,6 +167,18 @@ class Policy:
 
     token_ttl_seconds: int = 600
 
+    # Who makes the judgment calls: "rules" (the thresholds above) or "llm"
+    # (a model, guided by `preferences`; the thresholds become its fallback).
+    # Either way the hard stops in rubric.hard_stops are decided by code.
+    judge: str = "rules"
+    preferences: str = (
+        "Buy from stores a careful person would trust. Only suggest a cheaper seller if the "
+        "saving is real money for this purchase and that seller is at least as trustworthy. "
+        "I care about being able to return expensive items. If something important is "
+        "unknown, ask me instead of guessing."
+    )
+    llm_min_saving_pct: float = 3.0    # cheaper sellers below this aren't even shown to the model
+
     def scaled(self, factor: float) -> "Policy":
         """Same policy with money thresholds multiplied (e.g. 85 for INR)."""
         import copy
