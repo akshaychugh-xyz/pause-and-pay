@@ -1,0 +1,111 @@
+[
+  {
+    "name": "Big retailer, fair price",
+    "intent": {
+      "merchant_url": "https://www.bestbuy.com",
+      "item": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+      "price": 299.99
+    },
+    "expect": "proceed"
+  },
+  {
+    "name": "Brand's own store, fair price",
+    "intent": {
+      "merchant_url": "https://www.gymshark.com",
+      "item": "Gymshark Crest Hoodie",
+      "price": 50.0
+    },
+    "expect": "proceed"
+  },
+  {
+    "name": "Same headphones, $100 more than a trusted seller",
+    "intent": {
+      "merchant_url": "https://www.brandsmartusa.com",
+      "item": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+      "price": 399.99
+    },
+    "expect": "suggest_switch"
+  },
+  {
+    "name": "Agent's price is higher than the store's own listing",
+    "intent": {
+      "merchant_url": "https://www.bestbuy.com",
+      "item": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+      "price": 398.0
+    },
+    "expect": "suggest_switch"
+  },
+  {
+    "name": "Store nobody has heard of (made-up domain)",
+    "intent": {
+      "merchant_url": "https://bargain-audio-warehouse.example",
+      "item": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+      "price": 289.0
+    },
+    "expect": "ask_human"
+  },
+  {
+    "name": "Unknown store AND a price too good to be true",
+    "intent": {
+      "merchant_url": "https://bargain-audio-warehouse.example",
+      "item": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+      "price": 119.0
+    },
+    "expect": "block"
+  },
+  {
+    "name": "Lookalike domain using the brand's name (made-up)",
+    "intent": {
+      "merchant_url": "https://sony-outlet-store.example",
+      "item": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+      "price": 279.0
+    },
+    "expect": "block"
+  },
+  {
+    "name": "$8 at a store you already use",
+    "intent": {
+      "merchant_url": "https://www.target.com",
+      "item": "Duracell AA Batteries 8 Pack",
+      "price": 7.99
+    },
+    "known_merchants": [
+      "target.com"
+    ],
+    "expect": "proceed"
+  },
+  {
+    "name": "$75 at a store you already use (trust check only)",
+    "intent": {
+      "merchant_url": "https://www.target.com",
+      "item": "Sony PlayStation 5 DualSense Wireless Controller",
+      "price": 74.99
+    },
+    "known_merchants": [
+      "target.com"
+    ],
+    "expect": "proceed"
+  },
+  {
+    "name": "Outside the US: Indian retailer, priced in rupees",
+    "intent": {
+      "merchant_url": "https://www.nykaa.com",
+      "item": "Dyson Airwrap Origin Multi-Styler & Dryer",
+      "price": 32900,
+      "currency": "INR",
+      "country": "in"
+    },
+    "threshold_scale": 85,
+    "expect": "proceed"
+  },
+  {
+    "name": "SearchApi unreachable",
+    "intent": {
+      "merchant_url": "https://www.bestbuy.com",
+      "item": "Sony WH-1000XM5 Wireless Noise Canceling Headphones",
+      "price": 299.99
+    },
+    "simulate_outage": true,
+    "expect": "ask_human"
+  }
+]
