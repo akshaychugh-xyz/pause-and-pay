@@ -64,6 +64,7 @@ def _read_store_profile(report: StoreReport, store: dict) -> None:
                 report.shipping_days_max = max(days)
 
     for topic in store.get("rating_details") or []:
+        report.mentions[topic["name"]] = topic.get("mentions") or 0
         for sentiment in topic.get("sentiments") or []:
             if sentiment.get("label") == "poor":
                 report.poor_sentiment[topic["name"]] = sentiment.get("percentage", 0)
