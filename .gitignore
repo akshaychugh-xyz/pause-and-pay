@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+*.egg-info/
+
+# Live SearchApi responses cached while developing. Not committed.
+.cache/
+explore/
+
+# Receipts written by local runs.
+receipts/
+.pause_secret
+.env
+*.local.json
+.pause-dev/
