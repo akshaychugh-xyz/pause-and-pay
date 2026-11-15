@@ -27,6 +27,7 @@ from pathlib import Path
 from .deal import find_better_deal
 from .models import (ASK_HUMAN, BLOCK, PROCEED, SUGGEST_SWITCH, DealReport, Policy,
                      PurchaseIntent, StoreReport, Verdict, registrable_domain)
+from .judge import llm_decide, lookup_candidates
 from .rubric import decide, switch_candidates
 from .searchapi import SearchApi
 from .trust import check_store
@@ -48,18 +49,24 @@ class Receipt:
     searches: list[dict] = field(default_factory=list)
     seconds: float = 0.0
     token: str | None = None       # only set when the verdict is "proceed"
+    judge: dict = field(default_factory=lambda: {"mode": "rules"})  # who decided, and what the rules said
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, default=list)
 
 
 def pause(intent: PurchaseIntent, api: SearchApi | None = None,
-          policy: Policy | None = None) -> Receipt:
-    """Check the store and the price, decide, write a receipt."""
+          policy: Policy | None = None, llm_client=None) -> Receipt:
+    """Check the store and the price, decide, write a receipt.
+
+    `llm_client` is only used when policy.judge == "llm"; pass your own
+    anthropic.Anthropic() to control credentials, or leave it to the default.
+    """
     api = api or SearchApi()
     policy = policy or Policy()
     started, first_call = time.monotonic(), len(api.calls)
     known = intent.domain in policy.known_merchants
+    judged_by: dict = {"mode": "rules"}
 
     store: StoreReport | None = None
     deal: DealReport | None = None
@@ -78,17 +85,20 @@ def pause(intent: PurchaseIntent, api: SearchApi | None = None,
             alt_stores: dict[str, StoreReport] = {}
             if deal and deal.matched:
                 # Cheaper sellers get the same store check before anyone suggests them.
-                domains = list(dict.fromkeys(o.domain for o in switch_candidates(intent, deal, policy)))[:3]
+                offers = (lookup_candidates if policy.judge == "llm" else switch_candidates)(intent, deal, policy)
+                domains = list(dict.fromkeys(o.domain for o in offers))[:3]
                 lookups = pool.map(lambda d: check_store(api, d, intent.country, deep=False), domains)
                 alt_stores = dict(zip(domains, lookups))
         verdict = decide(intent, store, deal, policy, alt_stores)
+        if policy.judge == "llm":
+            verdict, judged_by = llm_decide(intent, store, deal, policy, alt_stores, verdict, llm_client)
 
     receipt = Receipt(
         id=uuid.uuid4().hex[:12],
         created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         intent=intent, tier=tier, verdict=verdict, store=store, deal=deal,
         searches=[asdict(call) for call in api.calls[first_call:]],
-        seconds=round(time.monotonic() - started, 2),
+        seconds=round(time.monotonic() - started, 2), judge=judged_by,
     )
     if verdict.decision == PROCEED:
         receipt.token = _issue_token(receipt.id, intent.merchant_url, intent.item,
@@ -214,4 +224,5 @@ def load_receipt(receipt_id: str) -> Receipt:
         store=StoreReport(**raw["store"]) if raw["store"] else None,
         deal=DealReport(**deal) if deal else None,
         searches=raw["searches"], seconds=raw["seconds"], token=raw["token"],
+        judge=raw.get("judge") or {"mode": "rules"},
     )
