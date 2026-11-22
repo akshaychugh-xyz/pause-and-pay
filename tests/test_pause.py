@@ -274,3 +274,46 @@ def test_lookalike_names_the_site_that_carries_the_brand(monkeypatch):
     receipt = run("acme-outlet-deals.test", 279.00)
     assert receipt.verdict.decision == BLOCK
     assert "the brand's own site is acme.test" in receipt.verdict.reasons[0]
+
+
+# ------------------------------------------------------- matching the listing
+
+def _listing(title, reviews=None, offers=None, seller="Some Store"):
+    from fakes import shopping_result
+
+    return shopping_result(1, title, seller, 100.0, reviews, offers)
+
+
+def _picked(item, listings):
+    from pause.deal import _pick_listing
+
+    chosen = _pick_listing(listings, PurchaseIntent("https://www.bigbox.test", item, 100.0))
+    return chosen["title"] if chosen else None
+
+
+def test_a_closer_title_beats_a_more_popular_listing():
+    listings = [_listing("Sony PlayStation 5 DualSense Edge Wireless Controller", 90000, "& more"),
+                _listing("Sony PlayStation 5 DualSense Wireless Controller", 500)]
+    assert _picked("Sony PlayStation 5 DualSense Wireless Controller", listings) == listings[1]["title"]
+
+
+def test_a_missing_word_is_a_different_product():
+    listings = [_listing("Dyson Airwrap i.d. Multi-Styler Dryer", 67000, "& more"),
+                _listing("Dyson Airwrap Origin Multi-Styler & Dryer", 900, "& more")]
+    assert _picked("Dyson Airwrap Origin Multi-Styler & Dryer", listings) == listings[1]["title"]
+
+
+def test_spelling_variants_count_as_the_same_title():
+    """'Cancelling' vs 'Canceling' must not cost the listing with many sellers its place."""
+    listings = [_listing("Sony WH-1000XM5 Wireless Noise Canceling Headphones", 3),
+                _listing("Sony WH-1000XM5 Wireless Noise Cancelling Headphones", 15000, "& more")]
+    assert _picked("Sony WH-1000XM5 Wireless Noise Canceling Headphones", listings) == listings[1]["title"]
+
+
+def test_among_equally_close_titles_the_one_with_several_sellers_wins():
+    listings = [_listing("Acme QC-900X Wireless Headphones", 15000),
+                _listing("Acme QC-900X Wireless Headphones", 15000, "& more")]
+    from pause.deal import _pick_listing
+
+    chosen = _pick_listing(listings, PurchaseIntent("https://www.bigbox.test", ITEM, 100.0))
+    assert chosen.get("offers") == "& more"
