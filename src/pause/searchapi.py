@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 BASE_URL = "https://www.searchapi.io/api/v1/search"
+KEY_REJECTED = "SearchApi rejected the API key (HTTP 401). Check SEARCHAPI_API_KEY."
 
 
 class SearchApiError(RuntimeError):
@@ -77,7 +78,9 @@ class SearchApi:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 data = json.load(response)
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:200]
+            if exc.code == 401:
+                raise SearchApiError(f"{engine}: {KEY_REJECTED}") from exc
+            detail = " ".join(exc.read().decode("utf-8", "replace").split())[:200]
             raise SearchApiError(f"{engine}: HTTP {exc.code} {detail}") from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise SearchApiError(f"{engine}: {exc}") from exc

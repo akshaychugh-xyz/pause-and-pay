@@ -14,7 +14,7 @@ from statistics import median
 
 from .gate import pause
 from .models import Policy, PurchaseIntent
-from .searchapi import SearchApi, SearchApiError
+from .searchapi import KEY_REJECTED, SearchApi, SearchApiError
 
 _LABELS = {"proceed": "Proceed", "suggest_switch": "Suggest switch",
            "ask_human": "Ask the human", "block": "Block"}
@@ -39,6 +39,9 @@ def run(cases_file: Path, cache_dir: Path | None = None, out: Path | None = None
             policy = policy.scaled(case["threshold_scale"])
         api = _Offline() if case.get("simulate_outage") else SearchApi(cache_dir=cache_dir)
         receipt = pause(PurchaseIntent(**case["intent"]), api, policy)
+        if receipt.store and KEY_REJECTED in (receipt.store.error or ""):
+            print(f"Stopped: {KEY_REJECTED}\nNo searches were made and no model was called.")
+            return 2
 
         got, expected = receipt.verdict.decision, case["expect"]
         passed = got == expected

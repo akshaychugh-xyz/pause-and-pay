@@ -198,3 +198,42 @@ def test_domain_age_years():
     assert domain_age_years("x.com was indexed by Google more than 10 years ago", today) == 10.0
     assert domain_age_years("x.com was first indexed by Google in October 2019", today) == 7.1
     assert domain_age_years(None) is None
+
+
+# ------------------------------------------------------------ a rejected key
+
+def _reject_key(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    def refuse(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {},
+                                     io.BytesIO(b'{\n  "error": "Invalid API key."\n}'))
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+
+
+def test_rejected_key_is_one_clear_line(monkeypatch):
+    from pause import SearchApi, SearchApiError
+
+    _reject_key(monkeypatch)
+    with pytest.raises(SearchApiError) as error:
+        SearchApi(api_key="wrong").search("google_about_this_store", domain="bigbox.test")
+    assert "Check SEARCHAPI_API_KEY" in str(error.value) and "\n" not in str(error.value)
+
+
+def test_scorecard_stops_at_a_rejected_key(monkeypatch, tmp_path, capsys):
+    import json
+
+    from pause.scorecard import run as run_scorecard
+
+    _reject_key(monkeypatch)
+    monkeypatch.setenv("SEARCHAPI_API_KEY", "wrong")
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps([
+        {"name": "one", "intent": {"merchant_url": "https://bigbox.test", "item": ITEM, "price": 299.99}, "expect": "proceed"},
+        {"name": "two", "intent": {"merchant_url": "https://pricey.test", "item": ITEM, "price": 399.99}, "expect": "proceed"},
+    ]))
+    assert run_scorecard(cases) == 2
+    output = capsys.readouterr().out
+    assert "Check SEARCHAPI_API_KEY" in output and "two" not in output
