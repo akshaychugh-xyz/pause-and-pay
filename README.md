@@ -75,6 +75,7 @@ agent wants to pay
 | `src/pause/trust.py` | `check_store()`: what Google knows about the store |
 | `src/pause/deal.py` | `find_better_deal()`: the same product at other sellers |
 | `src/pause/rubric.py` | `decide()`: plain if/else that turns the two reports into a verdict |
+| `src/pause/judge.py` | optional: a model makes the judgment calls instead of the thresholds |
 | `src/pause/gate.py` | `pause()`, the token, and a mock `pay()` that refuses without one |
 | `src/pause/searchapi.py` | a 100-line SearchApi client |
 
@@ -82,7 +83,7 @@ A full pause is 4 to 6 searches. One search is one SearchApi credit.
 
 ### The rubric
 
-These are opinions. They live in `Policy` in `src/pause/models.py`; change them.
+These are opinions. They live in `Policy` in `src/pause/models.py`; change them, or [let a model make the calls](#let-a-model-make-the-judgment-calls).
 
 | Signal | Result |
 |---|---|
@@ -104,6 +105,40 @@ Three things the rubric will not do:
 - **Switch sellers on its own.** A cheaper seller is a suggestion for the human.
 - **Treat missing data as a scam.** Unknown means ask.
 - **Trust the cheapest offer.** Google's offer data has no "refurbished" field, so an alternative only counts if the seller also shows up when Google Shopping is filtered to new items.
+
+## Let a model make the judgment calls
+
+Fixed thresholds are easy to explain and easy to get wrong. "Rating below 3.5" treats a brand's own store with 13 reviews like a risk, and "10% cheaper" treats $3 off a cable like $300 off a laptop. With `--judge llm`, a model weighs the same evidence the way a person would, and your thresholds become a sentence:
+
+```bash
+pip install -e ".[llm]"
+export ANTHROPIC_API_KEY=your_key
+
+pause check --url https://www.bestbuy.com \
+  --item "Sony WH-1000XM5 Wireless Noise Canceling Headphones" --price 299.99 \
+  --judge llm \
+  --preferences "I return things a lot, so I want at least 30 days. A saving under $20 isn't worth switching for."
+```
+
+The model is not trusted with everything. Code keeps a floor it cannot move:
+
+| Decided by code, always | Decided by the model |
+|---|---|
+| The search failed: ask the human | Is this rating good enough, given how many reviews are behind it? |
+| Google has no profile of the store: ask the human | Is this return window fine for this item and this price? |
+| Unknown store that imitates a brand, or is absurdly cheap: block | Does slow shipping matter for this purchase? |
+| Which cheaper sellers are even eligible (new, same product, store checked) | Is the saving worth switching for, and to which eligible seller? |
+| The price of the alternative, and the token for `pay()` | The reasons shown to the human |
+
+Three more guards:
+
+- **The model never sees raw web text.** It gets numbers and short, cleaned names. Reviews, store descriptions and page content stay out, because a store that wants your money controls some of that text.
+- **It can only pick a seller from the list the code gives it.** If it names anyone else, the verdict becomes "ask the human".
+- **If the model call fails for any reason, the fixed thresholds decide.** The receipt records which judge decided and what the thresholds would have said.
+
+The default model is `claude-opus-5-5` at low effort; set `PAUSE_JUDGE_MODEL` to change it. If a safety classifier declines a request, the call retries on Anthropic's recommended fallback model. One model call is added per judged pause. Hard stops and skipped purchases never call it.
+
+In Python it is one field: `pause(intent, policy=Policy(judge="llm", preferences="..."))`. For the MCP server, set `PAUSE_JUDGE=llm`. To compare the two judges on the test cases, run `pause scorecard cases/cases.json --judge llm`; each row shows what the thresholds would have said.
 
 ## Use it in your agent
 
@@ -140,7 +175,9 @@ The agent gets two tools, `pause_before_pay` and `pay`. There is no approve tool
 pause scorecard cases/cases.json
 ```
 
-The last run is in [SCORECARD.md](SCORECARD.md). The risky stores in it are made-up `.example` domains. I'm not going to label a real store as a scam in a test file.
+The last run is in [SCORECARD.md](SCORECARD.md), dated. The risky stores in it are made-up `.example` domains. I'm not going to label a real store as a scam in a test file.
+
+The cases that depend on a price are pinned to the prices on the day I wrote them. A week later the same headphones had dropped in price and Google was showing a different listing for them, and four "expected" verdicts had changed. The store checks and hard stops did not move. Treat the expected column as a record of one day, not a test that should stay green.
 
 Offline tests use invented stores and need no key:
 
@@ -151,7 +188,7 @@ pip install -e ".[dev]" && pytest
 ## Limits
 
 - Search results are a signal, not proof. A new honest store looks the same as a new dishonest one: unknown.
-- Matching the agent's item to a Google product listing is a guess from the title. The receipt says how confident it is.
+- Matching the agent's item to a Google product listing is a guess from the title, and it is the least stable part: Google can return a different listing for the same query an hour later. The receipt says which listing was matched and how confident it is.
 - Offer data doesn't say if an item is used, refurbished or leased. The rubric is conservative here and will miss some real deals.
 - Coupons and equivalent products are not checked.
 - Thresholds are in dollars. For other currencies, scale them with `Policy().scaled(85)`.

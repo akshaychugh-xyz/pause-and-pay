@@ -64,6 +64,7 @@ def _read_store_profile(report: StoreReport, store: dict) -> None:
                 report.shipping_days_max = max(days)
 
     for topic in store.get("rating_details") or []:
+        report.mentions[topic["name"]] = topic.get("mentions") or 0
         for sentiment in topic.get("sentiments") or []:
             if sentiment.get("label") == "poor":
                 report.poor_sentiment[topic["name"]] = sentiment.get("percentage", 0)
@@ -96,7 +97,9 @@ def _lookalike_of(api: SearchApi, domain: str, brand: str, country: str) -> str 
     official = [registrable_domain(r["link"]) for r in (results.get("organic_results") or [])[:3]
                 if r.get("link")]
     if official and domain not in official:
-        return official[0]
+        # "Sony official site" can rank playstation.com first; name the one that says "sony".
+        named = [site for site in official if brand_key in site.split(".")[0]]
+        return (named or official)[0]
     return None
 
 

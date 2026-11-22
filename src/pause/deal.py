@@ -27,6 +27,7 @@ _NOT_NEW = {
     "used": r"\bused\b|pre[\s-]?owned|second[\s-]?hand",
 }
 _BUNDLE = r"\bbundle\b|\bkit\b|\+| with "
+MIN_SELLERS_FOR_USUAL_PRICE = 3
 _STOPWORDS = {"the", "a", "an", "and", "for", "with", "of", "in", "new"}
 
 
@@ -74,8 +75,10 @@ def find_better_deal(api: SearchApi, intent: PurchaseIntent) -> DealReport:
             if r.get("seller") and not r.get("condition") and models <= _words(r.get("title", ""))
         })
 
+    # One or two sellers don't make a "usual price". Below three, the price
+    # is reported as not compared rather than judged against a thin sample.
     like_for_like = [o.total_price for o in report.offers if not o.condition_hint]
-    if like_for_like:
+    if len(like_for_like) >= MIN_SELLERS_FOR_USUAL_PRICE:
         report.median_price = round(median(like_for_like), 2)
     # "high" only if this very store is in the listing at about this price.
     own = [o for o in report.offers if o.domain == intent.domain]
@@ -119,8 +122,8 @@ def _pick_listing(results: list[dict], intent: PurchaseIntent) -> dict | None:
         score = (
             overlap
             + 0.6 * min(math.log10((result.get("reviews") or 0) + 1) / 4, 1.0)
-            + (0.4 if result.get("offers") else 0.0)          # several sellers
-            + (0.3 if merchant_key and merchant_key in seller_key else 0.0)
+            + (0.8 if result.get("offers") else 0.0)          # several sellers: something to compare
+            + (0.2 if merchant_key and merchant_key in seller_key else 0.0)
             - (0.5 if re.search(_BUNDLE, title.lower()) and not item_is_bundle else 0.0)
         )
         if score > best_score:

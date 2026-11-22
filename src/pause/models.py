@@ -72,6 +72,7 @@ class StoreReport:
     shipping_note: str | None = None    # e.g. "0-5 days"
     shipping_days_max: int | None = None
     poor_sentiment: dict[str, int] = field(default_factory=dict)  # topic -> % poor
+    mentions: dict[str, int] = field(default_factory=dict)        # topic -> how many reviews mention it
     other_ratings: dict[str, str] = field(default_factory=dict)   # name -> "85/100"
     scamadviser: int | None = None
     summary: str | None = None
@@ -166,6 +167,18 @@ class Policy:
     scam_cheap_ratio: float = 0.60     # this cheap AND an unknown store: block
 
     token_ttl_seconds: int = 600
+
+    # Who makes the judgment calls: "rules" (the thresholds above) or "llm"
+    # (a model, guided by `preferences`; the thresholds become its fallback).
+    # Either way the hard stops in rubric.hard_stops are decided by code.
+    judge: str = "rules"
+    preferences: str = (
+        "Buy from stores a careful person would trust. Only suggest a cheaper seller if the "
+        "saving is real money for this purchase and that seller is at least as trustworthy. "
+        "I care about being able to return expensive items. If something important is "
+        "unknown, ask me instead of guessing."
+    )
+    llm_min_saving_pct: float = 3.0    # cheaper sellers below this aren't even shown to the model
 
     def scaled(self, factor: float) -> "Policy":
         """Same policy with money thresholds multiplied (e.g. 85 for INR)."""

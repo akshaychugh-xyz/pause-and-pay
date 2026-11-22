@@ -6,17 +6,19 @@ There is deliberately no "approve" tool: approval belongs to the human.
 
 Run:  pause-mcp            (after `pip install -e ".[mcp]"`)
 Add:  claude mcp add pause -e SEARCHAPI_API_KEY=... -- pause-mcp
+Set PAUSE_JUDGE=llm (and ANTHROPIC_API_KEY) to let a model make the judgment calls.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 
 from mcp.server.mcpserver import MCPServer
 
 from .gate import PauseRequired, pause
 from .gate import pay as _pay
-from .models import PurchaseIntent
+from .models import Policy, PurchaseIntent
 
 mcp = MCPServer("pay-with-a-pause")
 
@@ -35,14 +37,18 @@ def pause_before_pay(merchant_url: str, item: str, price: float, currency: str =
     For anything except "proceed", the user approves by running
     `pause approve <receipt_id>` themselves and giving you the token.
     """
+    policy = Policy(judge=os.environ.get("PAUSE_JUDGE", "rules"))
+    if os.environ.get("PAUSE_PREFERENCES"):
+        policy.preferences = os.environ["PAUSE_PREFERENCES"]
     receipt = pause(PurchaseIntent(merchant_url, item, price, currency.upper(), country,
-                                   need_by_days=need_by_days))
+                                   need_by_days=need_by_days), policy=policy)
     alternative = receipt.verdict.alternative
     return {
         "verdict": receipt.verdict.decision,
         "reasons": receipt.verdict.reasons,
         "also_checked": receipt.verdict.notes,
         "alternative": asdict(alternative) if alternative else None,
+        "decided_by": receipt.judge["mode"],
         "receipt_id": receipt.id,
         "pause_token": receipt.token,
         "searches_used": len(receipt.searches),

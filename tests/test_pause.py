@@ -198,3 +198,79 @@ def test_domain_age_years():
     assert domain_age_years("x.com was indexed by Google more than 10 years ago", today) == 10.0
     assert domain_age_years("x.com was first indexed by Google in October 2019", today) == 7.1
     assert domain_age_years(None) is None
+
+
+# ------------------------------------------------------------ a rejected key
+
+def _reject_key(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    def refuse(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {},
+                                     io.BytesIO(b'{\n  "error": "Invalid API key."\n}'))
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+
+
+def test_rejected_key_is_one_clear_line(monkeypatch):
+    from pause import SearchApi, SearchApiError
+
+    _reject_key(monkeypatch)
+    with pytest.raises(SearchApiError) as error:
+        SearchApi(api_key="wrong").search("google_about_this_store", domain="bigbox.test")
+    assert "Check SEARCHAPI_API_KEY" in str(error.value) and "\n" not in str(error.value)
+
+
+def test_scorecard_stops_at_a_rejected_key(monkeypatch, tmp_path, capsys):
+    import json
+
+    from pause.scorecard import run as run_scorecard
+
+    _reject_key(monkeypatch)
+    monkeypatch.setenv("SEARCHAPI_API_KEY", "wrong")
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps([
+        {"name": "one", "intent": {"merchant_url": "https://bigbox.test", "item": ITEM, "price": 299.99}, "expect": "proceed"},
+        {"name": "two", "intent": {"merchant_url": "https://pricey.test", "item": ITEM, "price": 399.99}, "expect": "proceed"},
+    ]))
+    assert run_scorecard(cases) == 2
+    output = capsys.readouterr().out
+    assert "Check SEARCHAPI_API_KEY" in output and "two" not in output
+
+
+# ------------------------------------------------------------ thin evidence
+
+def test_one_seller_is_not_a_usual_price(monkeypatch):
+    """A listing with a single seller must not produce 'price is in line' or 'too cheap'."""
+    import fakes
+
+    monkeypatch.setattr(fakes, "PRODUCT", {
+        "product": {"title": ITEM, "brand": "Acme"},
+        "offers": [fakes.offer(1, "BigBox", "bigbox.test", 398.00)],
+    })
+    monkeypatch.setattr(fakes, "MORE_OFFERS", {"offers": []})
+    receipt = run("bigbox.test", 199.00)
+    assert receipt.deal.median_price is None
+    assert receipt.verdict.decision == PROCEED
+    text = " ".join(receipt.verdict.reasons + receipt.verdict.notes)
+    assert "too few to say what the usual price is" in text
+    assert "in line" not in text and "below the usual" not in text
+
+
+def test_lookalike_names_the_site_that_carries_the_brand(monkeypatch):
+    import fakes
+
+    original = fakes.FakeApi.search
+
+    def search(self, engine, **params):
+        if engine == "google":
+            self.calls.append(fakes.Call(engine, "search_x", 0.0))
+            return {"organic_results": [{"link": "https://www.gamesbrand.test/"},
+                                        {"link": "https://www.acme.test/"}]}
+        return original(self, engine, **params)
+
+    monkeypatch.setattr(fakes.FakeApi, "search", search)
+    receipt = run("acme-outlet-deals.test", 279.00)
+    assert receipt.verdict.decision == BLOCK
+    assert "the brand's own site is acme.test" in receipt.verdict.reasons[0]
