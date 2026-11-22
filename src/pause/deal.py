@@ -28,6 +28,7 @@ _NOT_NEW = {
 }
 _BUNDLE = r"\bbundle\b|\bkit\b|\+| with "
 MIN_SELLERS_FOR_USUAL_PRICE = 3
+_CLOSE_ENOUGH = 0.05   # titles within this of the closest one count as equally close
 _STOPWORDS = {"the", "a", "an", "and", "for", "with", "of", "in", "new"}
 
 
@@ -92,11 +93,15 @@ def find_better_deal(api: SearchApi, intent: PurchaseIntent) -> DealReport:
 def _pick_listing(results: list[dict], intent: PurchaseIntent) -> dict | None:
     """Choose the Google Shopping listing that is most likely the agent's item.
 
-    Google Shopping is noisy: bundles, other models, used items, single-seller
-    listings. Prefer the listing that names the same model, has the most
-    reviews and several sellers. That is usually the canonical product page.
+    Two steps, in this order:
+    1. Closest title wins. "DualSense Wireless Controller" must not match
+       "DualSense Edge Wireless Controller", a different product at twice the
+       price, just because that listing has more reviews.
+    2. Among titles that are equally close, prefer the listing with several
+       sellers and the most reviews. That is usually the canonical product
+       page, and it gives something to compare against.
 
-    The agent's price is deliberately not used here. If it were, a suspiciously
+    The agent's price is deliberately not used. If it were, a suspiciously
     cheap price would pull the match towards a cheaper variant and hide itself.
     """
     item_words = _words(intent.item)
@@ -104,7 +109,7 @@ def _pick_listing(results: list[dict], intent: PurchaseIntent) -> dict | None:
     merchant_key = re.sub(r"[^a-z0-9]", "", intent.domain.split(".")[0])
     item_is_bundle = bool(re.search(_BUNDLE, intent.item.lower()))
 
-    best, best_score = None, 0.0
+    candidates = []
     for result in results:
         if not result.get("product_token") or result.get("extracted_price") is None:
             continue
@@ -114,21 +119,33 @@ def _pick_listing(results: list[dict], intent: PurchaseIntent) -> dict | None:
         words = _words(title)
         if item_models and not item_models <= words:
             continue  # a different model (XM6 is not XM5)
-        overlap = len(item_words & words) / max(len(item_words), 1)
-        if not item_models and overlap < 0.6:
+        if not item_models and len(item_words & words) / max(len(item_words), 1) < 0.6:
             continue
 
         seller_key = re.sub(r"[^a-z0-9]", "", (result.get("seller") or "").lower())
-        score = (
-            overlap
-            + 0.6 * min(math.log10((result.get("reviews") or 0) + 1) / 4, 1.0)
+        usefulness = (
+            0.6 * min(math.log10((result.get("reviews") or 0) + 1) / 4, 1.0)
             + (0.8 if result.get("offers") else 0.0)          # several sellers: something to compare
             + (0.2 if merchant_key and merchant_key in seller_key else 0.0)
             - (0.5 if re.search(_BUNDLE, title.lower()) and not item_is_bundle else 0.0)
         )
-        if score > best_score:
-            best, best_score = result, score
-    return best
+        candidates.append((_closeness(item_words, words), usefulness, result))
+
+    if not candidates:
+        return None
+    closest = max(closeness for closeness, _, _ in candidates)
+    shortlist = [c for c in candidates if c[0] >= closest - _CLOSE_ENOUGH]
+    return max(shortlist, key=lambda c: (c[1], c[0]))[2]
+
+
+def _closeness(item_words: set[str], title_words: set[str]) -> float:
+    """1.0 when the two titles use the same words. Drops for item words the
+    listing lacks ("Origin") and for words the listing adds ("Edge")."""
+    shared = len(item_words & title_words)
+    if not shared:
+        return 0.0
+    recall, precision = shared / len(item_words), shared / len(title_words)
+    return 2 * recall * precision / (recall + precision)
 
 
 def _read_offers(raw_offers: list[dict]) -> list[Offer]:
@@ -170,7 +187,16 @@ def _condition_hint(text: str) -> str | None:
 def _words(text: str) -> set[str]:
     """Lowercase words; 'WH-1000XM5' becomes one word, 'wh1000xm5'."""
     raw = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", text.lower())
-    return {w.replace("-", "") for w in raw} - _STOPWORDS
+    return {_normal(w.replace("-", "")) for w in raw} - _STOPWORDS
+
+
+def _normal(word: str) -> str:
+    """'cancelling' and 'canceling', 'headphones' and 'headphone' are one word.
+    Model numbers are left alone."""
+    if any(c.isdigit() for c in word):
+        return word
+    word = word.replace("ll", "l")
+    return word[:-1] if len(word) > 3 and word.endswith("s") else word
 
 
 def _is_model_number(word: str) -> bool:
