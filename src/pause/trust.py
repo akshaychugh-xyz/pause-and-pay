@@ -97,7 +97,9 @@ def _lookalike_of(api: SearchApi, domain: str, brand: str, country: str) -> str 
     official = [registrable_domain(r["link"]) for r in (results.get("organic_results") or [])[:3]
                 if r.get("link")]
     if official and domain not in official:
-        return official[0]
+        # "Sony official site" can rank playstation.com first; name the one that says "sony".
+        named = [site for site in official if brand_key in site.split(".")[0]]
+        return (named or official)[0]
     return None
 
 

@@ -175,7 +175,9 @@ The agent gets two tools, `pause_before_pay` and `pay`. There is no approve tool
 pause scorecard cases/cases.json
 ```
 
-The last run is in [SCORECARD.md](SCORECARD.md). The risky stores in it are made-up `.example` domains. I'm not going to label a real store as a scam in a test file.
+The last run is in [SCORECARD.md](SCORECARD.md), dated. The risky stores in it are made-up `.example` domains. I'm not going to label a real store as a scam in a test file.
+
+The cases that depend on a price are pinned to the prices on the day I wrote them. A week later the same headphones had dropped in price and Google was showing a different listing for them, and four "expected" verdicts had changed. The store checks and hard stops did not move. Treat the expected column as a record of one day, not a test that should stay green.
 
 Offline tests use invented stores and need no key:
 
@@ -186,7 +188,7 @@ pip install -e ".[dev]" && pytest
 ## Limits
 
 - Search results are a signal, not proof. A new honest store looks the same as a new dishonest one: unknown.
-- Matching the agent's item to a Google product listing is a guess from the title. The receipt says how confident it is.
+- Matching the agent's item to a Google product listing is a guess from the title, and it is the least stable part: Google can return a different listing for the same query an hour later. The receipt says which listing was matched and how confident it is.
 - Offer data doesn't say if an item is used, refurbished or leased. The rubric is conservative here and will miss some real deals.
 - Coupons and equivalent products are not checked.
 - Thresholds are in dollars. For other currencies, scale them with `Policy().scaled(85)`.

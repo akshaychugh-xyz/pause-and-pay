@@ -1,3 +1,5 @@
+Snapshot from a live run on 15 November 2026. Prices and listings move, so a run today will differ: the cases that depend on a price (1, 3, 4 and 10) are pinned to that day's prices.
+
 | # | Case | Verdict | As expected | Why (first reason) | Searches | Time |
 |---|---|---|---|---|---|---|
 | 1 | Big retailer, fair price | **Proceed** | yes | Best Buy: rated 4.6/5 from 1,669 reviews, Top Quality Store. | 4 | 6.9s |

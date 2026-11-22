@@ -237,3 +237,40 @@ def test_scorecard_stops_at_a_rejected_key(monkeypatch, tmp_path, capsys):
     assert run_scorecard(cases) == 2
     output = capsys.readouterr().out
     assert "Check SEARCHAPI_API_KEY" in output and "two" not in output
+
+
+# ------------------------------------------------------------ thin evidence
+
+def test_one_seller_is_not_a_usual_price(monkeypatch):
+    """A listing with a single seller must not produce 'price is in line' or 'too cheap'."""
+    import fakes
+
+    monkeypatch.setattr(fakes, "PRODUCT", {
+        "product": {"title": ITEM, "brand": "Acme"},
+        "offers": [fakes.offer(1, "BigBox", "bigbox.test", 398.00)],
+    })
+    monkeypatch.setattr(fakes, "MORE_OFFERS", {"offers": []})
+    receipt = run("bigbox.test", 199.00)
+    assert receipt.deal.median_price is None
+    assert receipt.verdict.decision == PROCEED
+    text = " ".join(receipt.verdict.reasons + receipt.verdict.notes)
+    assert "too few to say what the usual price is" in text
+    assert "in line" not in text and "below the usual" not in text
+
+
+def test_lookalike_names_the_site_that_carries_the_brand(monkeypatch):
+    import fakes
+
+    original = fakes.FakeApi.search
+
+    def search(self, engine, **params):
+        if engine == "google":
+            self.calls.append(fakes.Call(engine, "search_x", 0.0))
+            return {"organic_results": [{"link": "https://www.gamesbrand.test/"},
+                                        {"link": "https://www.acme.test/"}]}
+        return original(self, engine, **params)
+
+    monkeypatch.setattr(fakes.FakeApi, "search", search)
+    receipt = run("acme-outlet-deals.test", 279.00)
+    assert receipt.verdict.decision == BLOCK
+    assert "the brand's own site is acme.test" in receipt.verdict.reasons[0]

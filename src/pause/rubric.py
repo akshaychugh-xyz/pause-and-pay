@@ -168,6 +168,9 @@ def decide(intent: PurchaseIntent, store: StoreReport, deal: DealReport | None,
             elif usual:
                 notes.append(f"Price is {-below_usual:.0f}% above the usual {money(usual)}, but no "
                              "cheaper seller passed the checks.")
+            else:
+                notes.append(f"Only {len(deal.offers)} seller(s) listed for '{title}', "
+                             "too few to say what the usual price is.")
 
     # -------------------------------------------------------------- verdict
     flags = must_ask + flags
