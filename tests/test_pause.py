@@ -317,3 +317,28 @@ def test_among_equally_close_titles_the_one_with_several_sellers_wins():
 
     chosen = _pick_listing(listings, PurchaseIntent("https://www.bigbox.test", ITEM, 100.0))
     assert chosen.get("offers") == "& more"
+
+
+# ------------------------------------------------- the lock on a real pay function
+
+def test_require_pause_guards_any_payment_function():
+    from pause import require_pause
+
+    charged = []
+
+    @require_pause
+    def charge_card(merchant_url, item, price, currency="USD", note=""):
+        charged.append((merchant_url, price, note))
+        return "charged"
+
+    with pytest.raises(PauseRequired, match="No pause token"):
+        charge_card("https://www.bigbox.test", ITEM, 299.99)
+    assert charged == []
+
+    token = run("bigbox.test", 299.99).token
+    assert charge_card("https://www.bigbox.test", ITEM, 299.99, pause_token=token, note="gift") == "charged"
+    assert charged == [("https://www.bigbox.test", 299.99, "gift")]
+
+    with pytest.raises(PauseRequired, match="different store, item or amount"):
+        charge_card("https://www.bigbox.test", ITEM, 349.99, pause_token=token)
+    assert len(charged) == 1
