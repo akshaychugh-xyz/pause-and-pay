@@ -2,6 +2,8 @@
 
 A checkpoint an AI agent has to pass before it pays.
 
+![Pay with a pause: my agent goes through three checks, gets one of four verdicts, and pay() refuses without a token](docs/diagrams/pause-hero.png)
+
 When a person buys something online, they do a quick check without thinking about it: is this store real, and is this a fair price? An agent with a card skips that step. This project puts it back, as code the agent can't talk its way around:
 
 1. **Is the store trustworthy?** Rating, review count, return window, shipping, and whether Google has ever heard of the domain.
