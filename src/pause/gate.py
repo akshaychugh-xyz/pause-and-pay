@@ -12,6 +12,7 @@ the verdict came out the way it did.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
@@ -143,6 +144,27 @@ def pay(merchant_url: str, item: str, price: float, currency: str = "USD",
         "currency": currency,
         "pause_receipt": receipt_id,
     }
+
+
+def require_pause(pay_function):
+    """Put the lock on your real payment function.
+
+        @require_pause
+        def charge_card(merchant_url, item, price, currency="USD"):
+            ...  # Stripe, a wallet, an agent checkout protocol
+
+        charge_card(url, item, price, pause_token=receipt.token)
+
+    The wrapped function refuses to run unless `pause_token` was issued by
+    pause() (or by a human with `pause approve`) for exactly this store, item
+    and amount. Give your agent the wrapped function, never the raw one.
+    """
+    @functools.wraps(pay_function)
+    def guarded(merchant_url: str, item: str, price: float, currency: str = "USD",
+                *args, pause_token: str | None = None, **kwargs):
+        verify_token(pause_token, merchant_url, item, price, currency)
+        return pay_function(merchant_url, item, price, currency, *args, **kwargs)
+    return guarded
 
 
 # ------------------------------------------------------------------ tokens

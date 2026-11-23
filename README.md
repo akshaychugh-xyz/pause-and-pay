@@ -140,7 +140,25 @@ The default model is `claude-opus-5-5` at low effort; set `PAUSE_JUDGE_MODEL` to
 
 In Python it is one field: `pause(intent, policy=Policy(judge="llm", preferences="..."))`. For the MCP server, set `PAUSE_JUDGE=llm`. To compare the two judges on the test cases, run `pause scorecard cases/cases.json --judge llm`; each row shows what the thresholds would have said.
 
-## Use it in your agent
+## Use it with your personal agent
+
+**An agent you run yourself** (it has a shell, or you can add MCP servers to it): point it at this repo. [AGENTS.md](AGENTS.md) tells it how to install the pause, when to call it and what to do with each verdict. This is the real lock: the agent only gets a `pay` tool that refuses without a token.
+
+**A hosted agent you can't install code into:** give it the link to [PRINCIPLES.md](PRINCIPLES.md) and tell it to follow those rules before it pays. It runs the same three checks with its own web search. Be clear with yourself about what this is: a request the agent chooses to follow, not a lock.
+
+**Your own payment function:** wrap it, and give the agent only the wrapped one.
+
+```python
+from pause import require_pause
+
+@require_pause
+def charge_card(merchant_url, item, price, currency="USD"):
+    ...  # Stripe, a wallet, an agent checkout protocol
+
+charge_card(url, item, price, pause_token=receipt.token)
+```
+
+## Use it in your code
 
 ```python
 from pause import PurchaseIntent, pause, pay
@@ -154,7 +172,7 @@ else:
     print(receipt.verdict.reasons)   # show the human, then `pause approve <receipt id>`
 ```
 
-`pay()` is a mock. Replace its body with your real payment call and keep the token check. The pause runs before the payment, so it works the same with a card, a wallet or an agent checkout protocol.
+`pay()` is a mock, so no money moves. For a real payment, wrap your own function with `require_pause` as shown above. The pause runs before the payment, so it works the same with a card, a wallet or an agent checkout protocol.
 
 Every pause writes a receipt to `~/.pause/receipts/`: what was checked, each SearchApi search id, the offers it saw, and why it decided what it did.
 
