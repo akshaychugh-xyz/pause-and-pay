@@ -47,6 +47,8 @@ def charge_card(merchant_url, item, price, currency="USD"):
 charge_card(url, item, price, pause_token=token)
 ```
 
+If you pay over x402, your human should build your HTTP client with `add_pause` (see "Use it with x402" in the [README](README.md)). Then the pause runs by itself when a seller answers 402, and the client will not sign without it. If it refuses, show your human the message. It names the receipt to approve.
+
 The `pay` tool that ships here is a mock. No money moves.
 
 ## 2. You cannot run code (a request, not a lock)

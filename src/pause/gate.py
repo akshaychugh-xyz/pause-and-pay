@@ -57,11 +57,13 @@ class Receipt:
 
 
 def pause(intent: PurchaseIntent, api: SearchApi | None = None,
-          policy: Policy | None = None, llm_client=None) -> Receipt:
+          policy: Policy | None = None, llm_client=None, compare_prices: bool = True) -> Receipt:
     """Check the store and the price, decide, write a receipt.
 
     `llm_client` is only used when policy.judge == "llm"; pass your own
     anthropic.Anthropic() to control credentials, or leave it to the default.
+    Set `compare_prices=False` when the purchase is not a product Google
+    Shopping would list (an API call, a download): only the store is checked.
     """
     api = api or SearchApi()
     policy = policy or Policy()
@@ -75,8 +77,10 @@ def pause(intent: PurchaseIntent, api: SearchApi | None = None,
         tier = "skip"
         verdict = Verdict(PROCEED, ["Small purchase at a store you've used before. No pause needed."])
     else:
-        tier = "full" if (intent.price >= policy.full_above or not known) else "trust"
-        brand_guess = intent.item.split()[0] if intent.item.split() else None
+        full = compare_prices and (intent.price >= policy.full_above or not known)
+        tier = "full" if full else "trust"
+        # A product title starts with its brand. Anything else has no brand to imitate.
+        brand_guess = intent.item.split()[0] if (compare_prices and intent.item.split()) else None
         with ThreadPoolExecutor(max_workers=4) as pool:
             store_job = pool.submit(check_store, api, intent.domain, intent.country, brand_guess,
                                     True, policy.min_reviews_for_rating)
@@ -122,10 +126,24 @@ def approve(receipt: Receipt, choice: str = "original", ttl_seconds: int = 600) 
         if not receipt.verdict.alternative:
             raise ValueError("This receipt has no alternative to approve.")
         offer = receipt.verdict.alternative.offer
-        return _issue_token(receipt.id, offer.link or offer.domain, intent.item,
-                            offer.total_price, intent.currency, ttl_seconds)
-    return _issue_token(receipt.id, intent.merchant_url, intent.item,
-                        intent.price, intent.currency, ttl_seconds)
+        token = _issue_token(receipt.id, offer.link or offer.domain, intent.item,
+                             offer.total_price, intent.currency, ttl_seconds)
+    else:
+        token = _issue_token(receipt.id, intent.merchant_url, intent.item,
+                             intent.price, intent.currency, ttl_seconds)
+    # Also kept on disk, for payment clients that retry on their own and
+    # cannot be handed a token (see x402_hook.py).
+    claims = json.loads(base64.urlsafe_b64decode(token.rsplit(".", 1)[0]))
+    folder = home() / "approved"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / claims["what"]).write_text(token)
+    return token
+
+
+def approved_token(merchant_url: str, item: str, price: float, currency: str = "USD") -> str | None:
+    """The token a human approved for exactly this purchase, if there is one."""
+    path = home() / "approved" / _fingerprint(merchant_url, item, price, currency)
+    return path.read_text().strip() if path.exists() else None
 
 
 def pay(merchant_url: str, item: str, price: float, currency: str = "USD",
@@ -135,7 +153,7 @@ def pay(merchant_url: str, item: str, price: float, currency: str = "USD",
     The check is the same whatever the rail is: a card, a wallet, an
     agent-checkout protocol. The pause happens before any of them.
     """
-    receipt_id = verify_token(pause_token, merchant_url, item, price, currency)
+    receipt_id = redeem_token(pause_token, merchant_url, item, price, currency)
     return {
         "status": "paid (mock)",
         "merchant": registrable_domain(merchant_url),
@@ -157,14 +175,73 @@ def require_pause(pay_function):
 
     The wrapped function refuses to run unless `pause_token` was issued by
     pause() (or by a human with `pause approve`) for exactly this store, item
-    and amount. Give your agent the wrapped function, never the raw one.
+    and amount, and has not been used before. Give your agent the wrapped
+    function, never the raw one.
     """
     @functools.wraps(pay_function)
     def guarded(merchant_url: str, item: str, price: float, currency: str = "USD",
                 *args, pause_token: str | None = None, **kwargs):
-        verify_token(pause_token, merchant_url, item, price, currency)
+        redeem_token(pause_token, merchant_url, item, price, currency)
         return pay_function(merchant_url, item, price, currency, *args, **kwargs)
     return guarded
+
+
+def pause_first(pay_function=None, *, policy: Policy | None = None, api: SearchApi | None = None,
+                llm_client=None, compare_prices: bool = True):
+    """Like require_pause, but the pause runs inside the call. No token to pass.
+
+        @pause_first
+        def charge_card(merchant_url, item, price, currency="USD"):
+            ...  # the real payment call
+
+        charge_card(url, item, price)   # pays, or raises PauseRequired with the reasons
+
+    Use this when the agent calls your payment function directly. Anything but
+    "proceed" raises PauseRequired; the message names the receipt a human can
+    approve, and the next identical call then goes through once.
+    """
+    def wrap(function):
+        @functools.wraps(function)
+        def guarded(merchant_url: str, item: str, price: float, currency: str = "USD",
+                    *args, **kwargs):
+            refusal = clear_to_pay(PurchaseIntent(merchant_url, item, price, currency),
+                                   api, policy, llm_client, compare_prices)
+            if refusal:
+                raise PauseRequired(refusal)
+            return function(merchant_url, item, price, currency, *args, **kwargs)
+        return guarded
+    return wrap(pay_function) if pay_function else wrap
+
+
+def clear_to_pay(intent: PurchaseIntent, api: SearchApi | None = None,
+                 policy: Policy | None = None, llm_client=None,
+                 compare_prices: bool = True) -> str | None:
+    """Pause for this purchase, unless a human already approved exactly it.
+
+    Returns None when the payment may go ahead (the token is used up here),
+    or the reason it may not. This is what pause_first and the x402 hook call.
+    """
+    spot = (intent.merchant_url, intent.item, intent.price, intent.currency)
+    approved = approved_token(*spot)
+    if approved:
+        try:
+            redeem_token(approved, *spot)
+            return None                # a human already said yes to exactly this
+        except PauseRequired:
+            pass                       # that approval expired or was used: pause again
+    receipt = pause(intent, api, policy, llm_client, compare_prices)
+    verdict = receipt.verdict
+    if verdict.decision == PROCEED:
+        redeem_token(receipt.token, *spot)
+        return None
+    label = {ASK_HUMAN: "ASK THE HUMAN", SUGGEST_SWITCH: "SUGGEST SWITCH", BLOCK: "BLOCK"}
+    text = f"Pause said {label[verdict.decision]} (receipt {receipt.id}): " + " ".join(verdict.reasons)
+    if verdict.decision == BLOCK:
+        return text + " Do not retry."
+    if verdict.decision == SUGGEST_SWITCH:
+        text += " Show your human both options."
+    return (text + f" To pay here anyway, your human runs `pause approve {receipt.id}` "
+            "and you retry within 10 minutes.")
 
 
 # ------------------------------------------------------------------ tokens
@@ -196,8 +273,25 @@ def verify_token(token: str | None, merchant_url: str, item: str, price: float,
     return claims["rid"]
 
 
+def redeem_token(token: str | None, merchant_url: str, item: str, price: float,
+                 currency: str = "USD") -> str:
+    """verify_token(), then burn the token so it cannot pay twice.
+
+    Burned before the money moves. If the payment then fails, pause again.
+    """
+    receipt_id = verify_token(token, merchant_url, item, price, currency)
+    folder = home() / "used"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        (folder / hashlib.sha256(token.encode()).hexdigest()[:32]).open("x").close()
+    except FileExistsError:
+        raise PauseRequired("Pause token was already used. Pause again.") from None
+    return receipt_id
+
+
 def _fingerprint(merchant_url: str, item: str, price: float, currency: str) -> str:
-    what = f"{registrable_domain(merchant_url)}|{' '.join(item.lower().split())}|{price:.2f}|{currency.upper()}"
+    # Six decimals, so a $0.001 payment and a $0.004 payment are different purchases.
+    what = f"{registrable_domain(merchant_url)}|{' '.join(item.lower().split())}|{price:.6f}|{currency.upper()}"
     return hashlib.sha256(what.encode()).hexdigest()[:32]
 
 

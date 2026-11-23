@@ -10,7 +10,7 @@ When a person buys something online, they do a quick check without thinking abou
 2. **Is there a better deal?** The same product at other sellers, with delivery included, and whether those sellers pass the same trust check.
 3. **Decide.** Proceed, suggest a switch, ask the human, or block. Every verdict lists its reasons.
 
-`pay()` refuses to run without a token from `pause()`. The token is tied to one store, one item and one amount, and expires in ten minutes.
+`pay()` refuses to run without a token from `pause()`. The token is tied to one store, one item and one amount, works once, and expires in ten minutes.
 
 The data comes from [SearchApi](https://www.searchapi.io/?utm_source=dev&utm_medium=ambassador&utm_campaign=akshaychugh.xyz), which returns Google's store, shopping and product pages as JSON.
 
@@ -160,6 +160,18 @@ def charge_card(merchant_url, item, price, currency="USD"):
 charge_card(url, item, price, pause_token=receipt.token)
 ```
 
+If the agent calls your payment function itself, `pause_first` runs the pause inside the call, so there is no token to pass around:
+
+```python
+from pause import pause_first
+
+@pause_first
+def charge_card(merchant_url, item, price, currency="USD"):
+    ...
+
+charge_card(url, item, price)   # pays, or raises PauseRequired with the reasons and the receipt id
+```
+
 ## Use it in your code
 
 ```python
@@ -174,7 +186,7 @@ else:
     print(receipt.verdict.reasons)   # show the human, then `pause approve <receipt id>`
 ```
 
-`pay()` is a mock, so no money moves. For a real payment, wrap your own function with `require_pause` as shown above. The pause runs before the payment, so it works the same with a card, a wallet or an agent checkout protocol.
+`pay()` is a mock, so no money moves. For a real payment, wrap your own function with `require_pause` as shown above, or see the x402 section below for one that is already wired up.
 
 Every pause writes a receipt to `~/.pause/receipts/`: what was checked, each SearchApi search id, the offers it saw, and why it decided what it did.
 
@@ -186,6 +198,57 @@ claude mcp add pause -e SEARCHAPI_API_KEY=your_key -- pause-mcp
 ```
 
 The agent gets two tools, `pause_before_pay` and `pay`. There is no approve tool on purpose. When the verdict is not "proceed", the human runs `pause approve <receipt id>` in a terminal and hands the token to the agent.
+
+## Use it with x402
+
+[x402](https://www.x402.org) puts the payment into HTTP. The seller answers `402 Payment Required` with what it wants paid, and the client signs a stablecoin payment and retries. The official Python client runs hooks between those two steps. `add_pause()` goes there, so the client cannot sign until the pause says proceed or you approve.
+
+```python
+from x402 import x402Client
+from x402.http.clients import x402HttpxClient
+from x402.mechanisms.evm.exact import register_exact_evm_client
+from pause.x402_hook import add_pause
+
+client = register_exact_evm_client(x402Client(), signer)
+
+async with x402HttpxClient(add_pause(client)) as http:
+    response = await http.get("https://store.example/buy/123")
+```
+
+Give your agent `http`. Keep `client` and the signer away from it.
+
+You can watch it work against the x402 project's public test endpoint. It needs no funds, because the script makes a throwaway key:
+
+```bash
+pip install -e ".[x402]"
+python examples/x402_demo.py
+```
+
+```
+1. The agent asks for https://x402.org/protected. The seller answers 402 and the pause runs.
+   Nothing was signed. The agent gets:
+   Failed to handle payment: Payment aborted: Pause said ASK THE HUMAN (receipt 645d47f6d1ed):
+   Google has no store profile for x402.org (domain history: x402.org was first indexed by
+   Google in March 2025). To pay here anyway, your human runs `pause approve 645d47f6d1ed`
+   and you retry within 10 minutes.
+
+2. You read the receipt and decide it's fine: pause approve 645d47f6d1ed
+3. The agent retries. This time the client signs and sends the payment.
+   Seller answered 402: invalid_exact_evm_insufficient_balance
+```
+
+That last line is the seller turning down a signed payment from an empty wallet. That is as far as I have tested it. I have not run it with a funded wallet.
+
+What to know before you rely on it:
+
+- The pause checks the site the request went to. The 402 also names a site, but the seller writes the 402, so that name is ignored.
+- An approval covers one payment of that exact amount to that site. The next request pauses again.
+- Most of what is sold over x402 today is API calls and data, and Google has no store profile for an API host. So the first payment to a new host comes back as "ask me". List the hosts you already use in `Policy(known_merchants=...)`, and payments under $50 to them skip the pause.
+- The price comparison is off for the same reason. Pass `compare_prices=True` when the client buys products.
+- Amounts are read as dollars only for the dollar stablecoins the x402 SDK lists. Anything else is refused.
+- The x402 client has its own cap of $1 a payment, and the pause does not raise it. Change it with `client.set_spend_controls(...)` if you want bigger payments to reach the pause.
+
+Other rails need the same thing: find the call that commits the money and wrap it with `pause_first` (or `require_pause`). With a card, that is the charge. With an agent checkout protocol, it is the call that completes the checkout. x402 is the only rail I have wired up and tested end to end.
 
 ## Scorecard
 
@@ -212,6 +275,7 @@ pip install -e ".[dev]" && pytest
 - Offer data doesn't say if an item is used, refurbished or leased. The rubric is conservative here and will miss some real deals.
 - Coupons and equivalent products are not checked.
 - Thresholds are in dollars. For other currencies, scale them with `Policy().scaled(85)`.
+- A token is used up when the payment starts. If the payment then fails, the agent has to pause again.
 
 ## License
 
