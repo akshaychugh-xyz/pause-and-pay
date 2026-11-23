@@ -342,3 +342,62 @@ def test_require_pause_guards_any_payment_function():
     with pytest.raises(PauseRequired, match="different store, item or amount"):
         charge_card("https://www.bigbox.test", ITEM, 349.99, pause_token=token)
     assert len(charged) == 1
+
+
+# ------------------------------------------------ one token, one payment
+
+def test_token_pays_once():
+    token = run("bigbox.test", 299.99).token
+    pay("https://www.bigbox.test", ITEM, 299.99, "USD", token)
+    with pytest.raises(PauseRequired, match="already used"):
+        pay("https://www.bigbox.test", ITEM, 299.99, "USD", token)
+
+
+def test_store_only_pause_for_things_that_are_not_products():
+    """An API call has no Google Shopping listing. Check the store, skip the price."""
+    receipt = pause(PurchaseIntent("https://www.bigbox.test/api", "Weather for one city", 0.25),
+                    FakeApi(), compare_prices=False)
+    assert (receipt.verdict.decision, receipt.tier) == (PROCEED, "trust")
+    assert engines(receipt) == ["google_about_this_store"]
+
+
+# ------------------------------------- pause_first: the lock without a token
+
+def charge_with_pause_first(api=None):
+    from pause import pause_first
+
+    charged = []
+
+    @pause_first(api=api or FakeApi())
+    def charge_card(merchant_url, item, price, currency="USD", note=""):
+        charged.append((merchant_url, price, note))
+        return "charged"
+
+    return charge_card, charged
+
+
+def test_pause_first_pays_a_good_store_without_any_token_passing():
+    charge_card, charged = charge_with_pause_first()
+    assert charge_card("https://www.bigbox.test", ITEM, 299.99, note="gift") == "charged"
+    assert charged == [("https://www.bigbox.test", 299.99, "gift")]
+
+
+def test_pause_first_refuses_and_names_the_receipt_to_approve():
+    charge_card, charged = charge_with_pause_first()
+    with pytest.raises(PauseRequired, match="ASK THE HUMAN") as refusal:
+        charge_card("https://nobody-knows-us.test", ITEM, 289.00)
+    assert charged == []
+
+    receipt_id = str(refusal.value).split("receipt ")[1].split(")")[0]
+    approve(load_receipt(receipt_id))                      # the human says yes
+    assert charge_card("https://nobody-knows-us.test", ITEM, 289.00) == "charged"
+    with pytest.raises(PauseRequired):                     # once
+        charge_card("https://nobody-knows-us.test", ITEM, 289.00)
+    assert len(charged) == 1
+
+
+def test_pause_first_never_charges_a_blocked_store():
+    charge_card, charged = charge_with_pause_first()
+    with pytest.raises(PauseRequired, match="BLOCK.*Do not retry"):
+        charge_card("https://acme-outlet-deals.test", ITEM, 279.00)
+    assert charged == []
